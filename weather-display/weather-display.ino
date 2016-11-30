@@ -19,7 +19,7 @@
 SoftwareSerial debugStatus = SoftwareSerial(0, 7);
 
 Process date;
-//HttpClient client;
+HttpClient client;
 
 unsigned long time;
 unsigned long lastFetchTime = 0;
@@ -31,15 +31,13 @@ const unsigned int FETCH_RATE_LIMIT = 60000; // once per minute
 const int NUM_FORECAST_DISPLAYS = 3;
 
 // API
-//const String YAHOO_API_CLIENT = "dj0yJmk9UVpZOWFEdUxRaHFxJmQ9WVdrOVQwUk5NMlJYTkdVbWNHbzlNQS0tJnM9Y29uc3VtZXJzZWNyZXQmeD03YQ--";
-//const String YAHOO_API_SECRET = "7a9fb4c7a538a785daae5c90dc686f311103ec58";
 const String WUNDER_API_KEY = "d289dcec22b2633c";
 const String WUNDER_URL = "http://api.wunderground.com/api/db33644a6938c385/hourly/q/NY/New_York.json";
 
 // JSON
-const size_t MAX_HTTP_CONTENT_SIZE =  JSON_ARRAY_SIZE(36) + JSON_OBJECT_SIZE(1) + 361*JSON_OBJECT_SIZE(2) + JSON_OBJECT_SIZE(3) + 36*JSON_OBJECT_SIZE(20) + 36*JSON_OBJECT_SIZE(27); // 64Kb
-const size_t JSON_BUFFER_SIZE =  JSON_ARRAY_SIZE(36) + JSON_OBJECT_SIZE(1) + 361*JSON_OBJECT_SIZE(2) + JSON_OBJECT_SIZE(3) + 36*JSON_OBJECT_SIZE(20) + 36*JSON_OBJECT_SIZE(27);
-StaticJsonBuffer<JSON_BUFFER_SIZE> jsonBuffer;
+const size_t MAX_HTTP_CONTENT_SIZE = 10000;
+const size_t JSON_BUFFER_SIZE = JSON_ARRAY_SIZE(49) + JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(6) + 17*JSON_OBJECT_SIZE(15) + 33*JSON_OBJECT_SIZE(16);
+
 
 Adafruit_7segment   primaryDisplay = Adafruit_7segment();
 Adafruit_AlphaNum4  forecastDisplay[NUM_FORECAST_DISPLAYS];
@@ -59,11 +57,10 @@ int temperature[] = {56, 57, 55, 56};
 /*------------------------------------------------------*/
 
 struct HourlyData {
-  char epoch[11];
-  char hour[2];
-  char temperature[3];
-  char temperatureMetric[3];
-  char condition[30];
+  unsigned long time;
+  unsigned int hourOffset;
+  double temperature;
+  char summary[30];
 };
 
 void resetDebugStatusCursor() {
@@ -75,32 +72,36 @@ void resetDebugStatusCursor() {
 
 void fetchForecast() {
 
-  HttpClient client;
+  
   String forecast;
   
   if (time - FETCH_RATE_LIMIT > lastFetchTime) {
     lastFetchTime = time;
-    //client.get("https://query.yahooapis.com/v1/public/yql -d q=\"select%20item.forecast%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text=%22brooklyn,%20ny%22)\" -d format=json");  
-    client.get("http://api.wunderground.com/api/db33644a6938c385/hourly/q/NY/New_York.json");
-    //resetDebugStatusCursor();
+    //client.get("http://api.wunderground.com/api/db33644a6938c385/hourly/q/NY/New_York.json");
     Serial.println("Fetching weather...");
+    Serial.flush();
+    client.noCheckSSL();
+    //client.get("https://api.darksky.net/forecast/483edf4420d21e2d625cf60805566a7e/40.650002,-73.949997?exclude=minutely,daily,alerts,flags");
+
+    
     delay(2000);
   }
+//  
+//  if (client.available() > 0) {
+//    char response[MAX_HTTP_CONTENT_SIZE];
+//    size_t length = client.readBytes(response, MAX_HTTP_CONTENT_SIZE);
+//    response[length] = 0; // end string
+//    Serial.println(response);
+//    Serial.flush();
+//    HourlyData hourlyData;
+//    if (parseHourlyData(response, &hourlyData, 0)) {
+//      Serial.println("done until next request.");
+//      Serial.flush();
+//    }
+//    
+//  }
+
   
-  if (client.available() > 0) {
-    char response[MAX_HTTP_CONTENT_SIZE];
-    size_t length = client.readBytes(response, MAX_HTTP_CONTENT_SIZE);
-    response[length] = 0; // end string
-    Serial.println(response);
-
-    HourlyData hourlyData;
-    if (parseHourlyData(response, &hourlyData, 0)) {
-      Serial.println("done until next request.");
-    }
-    
-  }
-
-  Serial.flush();
 }
 
 bool parseHourlyData(char* content, struct HourlyData* hourlyData, int hourOffset) {
@@ -109,32 +110,37 @@ bool parseHourlyData(char* content, struct HourlyData* hourlyData, int hourOffse
   
   // Allocate a temporary memory pool on the stack
   
-
+StaticJsonBuffer<JSON_BUFFER_SIZE> jsonBuffer;
   JsonObject& root = jsonBuffer.parseObject(content);
 
   if (!root.success()) {
     Serial.println("JSON parsing failed!");
     return false;
   }
-
   
-  // Here were copy the strings we're interested in
-  strcpy(hourlyData->epoch, root["hourly_forecast"][hourOffset]["FCTTIME"]["epoch"]);
-  strcpy(hourlyData->hour, root["hourly_forecast"][hourOffset]["FCTTIME"]["hour"]);
-  strcpy(hourlyData->temperature, root["hourly_forecast"][hourOffset]["temp"]["english"]);
-  strcpy(hourlyData->temperatureMetric, root["hourly_forecast"][hourOffset]["temp"]["metric"]);
-  strcpy(hourlyData->condition, root["hourly_forecast"][hourOffset]["condition"]);
+  // darksky
+  hourlyData->time = root["hourly"]["data"][hourOffset]["time"];
+  hourlyData->hourOffset = hourOffset;
+  hourlyData->temperature = root["hourly"]["data"][hourOffset]["temperature"];
+  strcpy(hourlyData->summary, root["hourly"]["data"][hourOffset]["summary"]);
+
+  // wunderground
+  //strcpy(hourlyData->epoch, root["hourly_forecast"][hourOffset]["FCTTIME"]["epoch"]);
+  //strcpy(hourlyData->hour, root["hourly_forecast"][hourOffset]["FCTTIME"]["hour"]);
+  //strcpy(hourlyData->temperature, root["hourly_forecast"][hourOffset]["temp"]["english"]);
+  //strcpy(hourlyData->temperatureMetric, root["hourly_forecast"][hourOffset]["temp"]["metric"]);
+  //strcpy(hourlyData->condition, root["hourly_forecast"][hourOffset]["condition"]);
 
   Serial.println("Parse Hourly Data success!");
   
   String demo = "";
   demo.concat("Hour: ");
-  demo.concat(hourlyData->hour);
+  demo.concat(int(hourlyData->hourOffset));
   demo.concat(" Temp: ");
-  demo.concat(hourlyData->temperature);
+  demo.concat(int(hourlyData->temperature));
   demo.concat("º F ");
   demo.concat("'");
-  demo.concat(hourlyData->condition);
+  demo.concat(hourlyData->summary);
   demo.concat("'");
   
   Serial.println(demo);
@@ -307,7 +313,9 @@ void setup() {
   SerialUSB.begin(9600);
   Serial.begin(9600);
   
-  while(!Serial);
+  //while(!Serial);
+  //while(!SerialUSB);
+  
   
   time = millis() + FETCH_RATE_LIMIT; // initialize time
   lastFetchTime = 0;
@@ -321,7 +329,8 @@ void loop() {
   time = millis() + FETCH_RATE_LIMIT;
   updatePrimaryDisplay();
   updateForecastDisplay();
-  
+  Serial.println("1 sec...");
+  Serial.flush();
   fetchForecast();
   //updateDebugStatus();
 
