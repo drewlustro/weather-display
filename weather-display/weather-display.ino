@@ -11,10 +11,11 @@
 #include <Process.h>
 #include <Bridge.h>
 #include <HttpClient.h>
-#include <ArduinoJson.h>
 #include "Arduino.h"
 #include "Adafruit_LEDBackpack.h"
 #include "Adafruit_GFX.h"
+
+#define arr_len( x )  ( sizeof( x ) / sizeof( *x ) )
 
 SoftwareSerial debugStatus = SoftwareSerial(0, 7);
 
@@ -34,10 +35,6 @@ const int NUM_FORECAST_DISPLAYS = 3;
 const String WUNDER_API_KEY = "d289dcec22b2633c";
 const String WUNDER_URL = "http://api.wunderground.com/api/db33644a6938c385/hourly/q/NY/New_York.json";
 
-// JSON
-const size_t MAX_HTTP_CONTENT_SIZE = 10000;
-const size_t JSON_BUFFER_SIZE = JSON_ARRAY_SIZE(49) + JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(6) + 17*JSON_OBJECT_SIZE(15) + 33*JSON_OBJECT_SIZE(16);
-
 
 Adafruit_7segment   primaryDisplay = Adafruit_7segment();
 Adafruit_AlphaNum4  forecastDisplay[NUM_FORECAST_DISPLAYS];
@@ -45,22 +42,22 @@ Adafruit_AlphaNum4  forecastDisplay[NUM_FORECAST_DISPLAYS];
 String meridiem;
 char displayChar0, displayChar1, displayChar2, displayChar3;
 int hours, minutes, seconds, month, day, year;
-int lastSecond = -1;
 int lastFetch = -1;
-
+int lastSecond = -1;
 
 /*-------------------------------- Manual Input Data */
-String weatherCondition[] = {"none", "none", "RAIN", "SNOW"};
+String summary[] = {"XXXX", "XXXX", "XXXX", "XXXX"};
+int temperature[] = {0, 0, 0, 0};
+int desiredOffsets[] = {0, 3, 7, 11}; // current, 4hrs, 8hrs, 12hrs
 String zipcode = "11211";
-int temperature[] = {56, 57, 55, 56};
 
 /*------------------------------------------------------*/
 
 struct HourlyData {
-  unsigned long time;
-  unsigned int hourOffset;
   double temperature;
-  char summary[30];
+  unsigned int hourOffset;
+  unsigned long epochTime; 
+  char summary[40];
 };
 
 void resetDebugStatusCursor() {
@@ -70,6 +67,36 @@ void resetDebugStatusCursor() {
   delay(10);
 }
 
+String getStringPartByIndex(String data, char separator, int index) {
+
+    int stringData = 0; 
+    String dataPart = "";     
+    
+    for (int i = 0; i < data.length(); i++) {  
+      
+      if (data[i] == separator) {
+        stringData++;
+        
+      } else if (stringData == index) {
+        dataPart.concat(data[i]);
+        
+      } else if (stringData > index) {
+        return dataPart;
+      }
+
+    }
+    return dataPart;
+}
+
+bool isDesiredHourOffset(int offset) {
+  for (int i = 0; i < arr_len(desiredOffsets); i++) {
+    if (offset == desiredOffsets[i]) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void fetchForecast() {
 
   
@@ -77,78 +104,40 @@ void fetchForecast() {
   
   if (time - FETCH_RATE_LIMIT > lastFetchTime) {
     lastFetchTime = time;
-    //client.get("http://api.wunderground.com/api/db33644a6938c385/hourly/q/NY/New_York.json");
+    client.get("http://weather-proxy.maxrelax.co/weather.csv");
     Serial.println("Fetching weather...");
     Serial.flush();
-    client.noCheckSSL();
-    //client.get("https://api.darksky.net/forecast/483edf4420d21e2d625cf60805566a7e/40.650002,-73.949997?exclude=minutely,daily,alerts,flags");
 
+    delay(500);
+  }
+
+  String hourDataRaw;
+  int storeIndex = 0;
+  
+  while (client.available()) {
     
-    delay(2000);
+    hourDataRaw = client.readStringUntil('\n');  
+    int offset = getStringPartByIndex(hourDataRaw, ',', 1).toInt();
+    
+    if (isDesiredHourOffset(offset)) {
+    
+      String temp = getStringPartByIndex(hourDataRaw, ',', 0);
+      String epochTime = getStringPartByIndex(hourDataRaw, ',', 2);
+      String condition = getStringPartByIndex(hourDataRaw, ',', 3);
+  
+  
+      temperature[storeIndex] = temp.toInt();
+      summary[storeIndex] = condition;
+  
+      Serial.println("HOUR " + String(offset) + ": " + temperature[storeIndex] + " /  " + summary[storeIndex]);
+      Serial.flush();
+
+      storeIndex++;
+    }
+
+    delay(50);
   }
-//  
-//  if (client.available() > 0) {
-//    char response[MAX_HTTP_CONTENT_SIZE];
-//    size_t length = client.readBytes(response, MAX_HTTP_CONTENT_SIZE);
-//    response[length] = 0; // end string
-//    Serial.println(response);
-//    Serial.flush();
-//    HourlyData hourlyData;
-//    if (parseHourlyData(response, &hourlyData, 0)) {
-//      Serial.println("done until next request.");
-//      Serial.flush();
-//    }
-//    
-//  }
-
-  
-}
-
-bool parseHourlyData(char* content, struct HourlyData* hourlyData, int hourOffset) {
-  // Compute optimal size of the JSON buffer according to what we need to parse.
-  // This is only required if you use StaticJsonBuffer.
-  
-  // Allocate a temporary memory pool on the stack
-  
-StaticJsonBuffer<JSON_BUFFER_SIZE> jsonBuffer;
-  JsonObject& root = jsonBuffer.parseObject(content);
-
-  if (!root.success()) {
-    Serial.println("JSON parsing failed!");
-    return false;
-  }
-  
-  // darksky
-  hourlyData->time = root["hourly"]["data"][hourOffset]["time"];
-  hourlyData->hourOffset = hourOffset;
-  hourlyData->temperature = root["hourly"]["data"][hourOffset]["temperature"];
-  strcpy(hourlyData->summary, root["hourly"]["data"][hourOffset]["summary"]);
-
-  // wunderground
-  //strcpy(hourlyData->epoch, root["hourly_forecast"][hourOffset]["FCTTIME"]["epoch"]);
-  //strcpy(hourlyData->hour, root["hourly_forecast"][hourOffset]["FCTTIME"]["hour"]);
-  //strcpy(hourlyData->temperature, root["hourly_forecast"][hourOffset]["temp"]["english"]);
-  //strcpy(hourlyData->temperatureMetric, root["hourly_forecast"][hourOffset]["temp"]["metric"]);
-  //strcpy(hourlyData->condition, root["hourly_forecast"][hourOffset]["condition"]);
-
-  Serial.println("Parse Hourly Data success!");
-  
-  String demo = "";
-  demo.concat("Hour: ");
-  demo.concat(int(hourlyData->hourOffset));
-  demo.concat(" Temp: ");
-  demo.concat(int(hourlyData->temperature));
-  demo.concat("º F ");
-  demo.concat("'");
-  demo.concat(hourlyData->summary);
-  demo.concat("'");
-  
-  Serial.println(demo);
-  // It's not mandatory to make a copy, you could just use the pointers
-  // Since, they are pointing inside the "content" buffer, so you need to make
-  // sure it's still in memory when you read the string
-
-  return true;
+  Serial.flush();
 }
 
 
@@ -188,7 +177,7 @@ void clearDisplays() {
   primaryDisplay.writeDisplay();
 
   // FORECAST
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < NUM_FORECAST_DISPLAYS; i++) {
     forecastDisplay[i].begin(0x71 + i); // assign I2C address to initialize display
     forecastDisplay[i].setBrightness(1); // set brightness, 1-15
     forecastDisplay[i].writeDigitRaw(i, 0x0); // turn off
@@ -206,7 +195,7 @@ void fetchDate() {
 }
 
 void updatePrimaryDisplay() {
-  primaryDisplay.writeDigitRaw(0, 0x1);
+  primaryDisplay.writeDigitRaw(0, 0x0);
   primaryDisplay.writeDigitNum(1, temperature[0] / 10);
   primaryDisplay.writeDigitNum(3, temperature[0] % 10);
   primaryDisplay.writeDigitRaw(4, 0x0);
@@ -220,19 +209,30 @@ void updateForecastDisplay() {
 
     forecastDisplay[i].writeDigitRaw(0, 0x0);
     forecastDisplay[i].writeDigitAscii(1, temperatureString.charAt(0));
-    forecastDisplay[i].writeDigitAscii(2, temperatureString.charAt(1));
+    if (temperature[i + 1] > 9 || temperature[i + 1] < 0) {
+      forecastDisplay[i].writeDigitAscii(2, temperatureString.charAt(1));
+    }
     forecastDisplay[i].writeDigitRaw(3, 0x0);
     forecastDisplay[i].writeDisplay();
-    delay(100);
-    if (weatherCondition[i + 1] != "none")  {
-      forecastDisplay[i].writeDigitAscii(0, weatherCondition[i + 1].charAt(0));
-      forecastDisplay[i].writeDigitAscii(1, weatherCondition[i + 1].charAt(1));
-      forecastDisplay[i].writeDigitAscii(2, weatherCondition[i + 1].charAt(2));
-      forecastDisplay[i].writeDigitAscii(3, weatherCondition[i + 1].charAt(3));
+  }
+
+  delay(3000);
+  
+  for (int i = 0; i < NUM_FORECAST_DISPLAYS; i++) {
+
+    String temperatureString = String(temperature[i + 1]);
+
+    if (summary[i + 1] != "none" || temperature[i+1] == 0)  {
+      forecastDisplay[i].writeDigitAscii(0, summary[i + 1].charAt(0));
+      forecastDisplay[i].writeDigitAscii(1, summary[i + 1].charAt(1));
+      forecastDisplay[i].writeDigitAscii(2, summary[i + 1].charAt(2));
+      forecastDisplay[i].writeDigitAscii(3, summary[i + 1].charAt(3));
       forecastDisplay[i].writeDisplay();
       delay(100);
     }
   }
+
+  delay(2000);
 }
 
 void updateDebugStatus() {
@@ -310,10 +310,10 @@ void updateDebugStatus() {
 
 void setup() {
   Bridge.begin();
-  SerialUSB.begin(9600);
+  //SerialUSB.begin(9600);
   Serial.begin(9600);
   
-  //while(!Serial);
+  while(!Serial);
   //while(!SerialUSB);
   
   
@@ -332,9 +332,6 @@ void loop() {
   Serial.println("1 sec...");
   Serial.flush();
   fetchForecast();
-  //updateDebugStatus();
-
-  delay(1000);
 }
 
 
