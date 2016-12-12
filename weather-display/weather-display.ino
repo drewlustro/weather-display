@@ -24,17 +24,14 @@ HttpClient client;
 
 unsigned long time;
 unsigned long lastFetchTime = 0;
+boolean hasForecast = false;
 
 
-const unsigned int FETCH_RATE_LIMIT = 60000; // once per minute
+//const unsigned int FETCH_RATE_LIMIT = 60000; // once per minute
+const unsigned int FETCH_RATE_LIMIT = 1200000; // once per 20 min
 //const unsigned int FETCH_RATE_LIMIT = 1800000; // once per half hour
 
 const int NUM_FORECAST_DISPLAYS = 3;
-
-// API
-const String WUNDER_API_KEY = "d289dcec22b2633c";
-const String WUNDER_URL = "http://api.wunderground.com/api/db33644a6938c385/hourly/q/NY/New_York.json";
-
 
 Adafruit_7segment   primaryDisplay = Adafruit_7segment();
 Adafruit_AlphaNum4  forecastDisplay[NUM_FORECAST_DISPLAYS];
@@ -46,9 +43,9 @@ int lastFetch = -1;
 int lastSecond = -1;
 
 /*-------------------------------- Manual Input Data */
-String summary[] = {"XXXX", "XXXX", "XXXX", "XXXX"};
+String summary[] = {"NONE", "XXXX", "XXXX", "XXXX"};
 int temperature[] = {0, 0, 0, 0};
-int desiredOffsets[] = {0, 3, 7, 11}; // current, 4hrs, 8hrs, 12hrs
+int desiredOffsets[] = {0, 4, 8, 12}; // current, 4hrs, 8hrs, 12hrs (server-side controlled)
 String zipcode = "11211";
 
 /*------------------------------------------------------*/
@@ -117,6 +114,7 @@ void fetchForecast() {
   while (client.available()) {
     
     hourDataRaw = client.readStringUntil('\n');  
+    //Serial.println(hourDataRaw);
     int offset = getStringPartByIndex(hourDataRaw, ',', 1).toInt();
     
     if (isDesiredHourOffset(offset)) {
@@ -136,6 +134,7 @@ void fetchForecast() {
     }
 
     delay(50);
+    hasForecast = true;
   }
   Serial.flush();
 }
@@ -176,14 +175,27 @@ void clearDisplays() {
   primaryDisplay.writeDigitRaw(4, 0x0);
   primaryDisplay.writeDisplay();
 
+  delay(50);
+
   // FORECAST
   for (int i = 0; i < NUM_FORECAST_DISPLAYS; i++) {
-    forecastDisplay[i].begin(0x71 + i); // assign I2C address to initialize display
-    forecastDisplay[i].setBrightness(1); // set brightness, 1-15
-    forecastDisplay[i].writeDigitRaw(i, 0x0); // turn off
-    forecastDisplay[i].writeDisplay();
+    clearForecastDisplay(i);
+    
   }
 
+}
+
+void clearForecastDisplay(int index) {
+
+  forecastDisplay[index].begin(0x71 + index); // assign I2C address to initialize display
+  forecastDisplay[index].setBrightness(1); // set brightness, 1-15
+  forecastDisplay[index].writeDigitRaw(0, 0x0); // turn off
+  forecastDisplay[index].writeDigitRaw(1, 0x0); // turn off
+  forecastDisplay[index].writeDigitRaw(2, 0x0); // turn off
+  forecastDisplay[index].writeDigitRaw(3, 0x0); // turn off
+  forecastDisplay[index].writeDisplay();
+  delay(50);
+  
 }
 
 void fetchDate() {
@@ -195,24 +207,87 @@ void fetchDate() {
 }
 
 void updatePrimaryDisplay() {
-  primaryDisplay.writeDigitRaw(0, 0x0);
-  primaryDisplay.writeDigitNum(1, temperature[0] / 10);
-  primaryDisplay.writeDigitNum(3, temperature[0] % 10);
+  if (!hasForecast) return;
+  
+  if (temperature[0] < 0) {
+    // negative sign, taken from 
+    // https://github.com/adafruit/Adafruit_LED_Backpack/blob/master/Adafruit_LEDBackpack.cpp
+    primaryDisplay.writeDigitRaw(0, 0x40);
+  } else {
+    primaryDisplay.writeDigitRaw(0, 0x0);
+  }
+  
+  primaryDisplay.writeDigitNum(1, abs(temperature[0]) / 10);
+  primaryDisplay.writeDigitNum(3, abs(temperature[0]) % 10);
   primaryDisplay.writeDigitRaw(4, 0x0);
   primaryDisplay.writeDisplay();
+
+  if (summary[0] != "NONE")  {
+    delay(2000);
+    
+    for (int x = 0; x < 3; x++) {
+
+      clearForecastDisplay(0);
+      clearForecastDisplay(1);
+      clearForecastDisplay(2);
+
+      delay(500);
+
+      for (int i = 0; i < NUM_FORECAST_DISPLAYS; i++) {
+        
+        
+        forecastDisplay[i].writeDigitAscii(0, summary[0].charAt(0));
+        forecastDisplay[i].writeDigitAscii(1, summary[0].charAt(1));
+        forecastDisplay[i].writeDigitAscii(2, summary[0].charAt(2));
+        forecastDisplay[i].writeDigitAscii(3, summary[0].charAt(3));
+        forecastDisplay[i].writeDisplay();
+        delay(400);
+        clearForecastDisplay(i);
+        
+      }
+
+      delay(100);
+       
+    }    
+  }
+
+  if (temperature[0] < 0) {
+    // negative sign, taken from 
+    // https://github.com/adafruit/Adafruit_LED_Backpack/blob/master/Adafruit_LEDBackpack.cpp
+    primaryDisplay.writeDigitRaw(0, 0x40);
+  } else {
+    primaryDisplay.writeDigitRaw(0, 0x0);
+  }
+  
+  primaryDisplay.writeDigitNum(1, abs(temperature[0]) / 10);
+  primaryDisplay.writeDigitNum(3, abs(temperature[0]) % 10);
+  primaryDisplay.writeDigitRaw(4, 0x0);
+  primaryDisplay.writeDisplay();
+  
+
 }
 
 void updateForecastDisplay() {
+  if (!hasForecast) return;
+  
   for (int i = 0; i < NUM_FORECAST_DISPLAYS; i++) {
 
     String temperatureString = String(temperature[i + 1]);
 
     forecastDisplay[i].writeDigitRaw(0, 0x0);
     forecastDisplay[i].writeDigitAscii(1, temperatureString.charAt(0));
+
+    // double-digit compenation
     if (temperature[i + 1] > 9 || temperature[i + 1] < 0) {
       forecastDisplay[i].writeDigitAscii(2, temperatureString.charAt(1));
     }
-    forecastDisplay[i].writeDigitRaw(3, 0x0);
+
+    // 100's and negative number -10 and below compensation 
+    if (temperature[i + 1] > 99 || temperature[i + 1] < -9) {
+      forecastDisplay[i].writeDigitAscii(3, temperatureString.charAt(2));
+    } else {
+      forecastDisplay[i].writeDigitRaw(3, 0x0);
+    }
     forecastDisplay[i].writeDisplay();
   }
 
@@ -222,7 +297,7 @@ void updateForecastDisplay() {
 
     String temperatureString = String(temperature[i + 1]);
 
-    if (summary[i + 1] != "none" || temperature[i+1] == 0)  {
+    if (summary[i + 1] != "NONE" || temperature[i+1] == 0)  {
       forecastDisplay[i].writeDigitAscii(0, summary[i + 1].charAt(0));
       forecastDisplay[i].writeDigitAscii(1, summary[i + 1].charAt(1));
       forecastDisplay[i].writeDigitAscii(2, summary[i + 1].charAt(2));
@@ -233,7 +308,34 @@ void updateForecastDisplay() {
   }
 
   delay(2000);
+
+
+  // TOOD: clean this up - no need to dupe code here.
+  for (int i = 0; i < NUM_FORECAST_DISPLAYS; i++) {
+
+    String temperatureString = String(temperature[i + 1]);
+
+    forecastDisplay[i].writeDigitRaw(0, 0x0);
+    forecastDisplay[i].writeDigitAscii(1, temperatureString.charAt(0));
+
+    // double-digit compenation
+    if (temperature[i + 1] > 9 || temperature[i + 1] < 0) {
+      forecastDisplay[i].writeDigitAscii(2, temperatureString.charAt(1));
+    }
+
+    // 100's and negative number -10 and below compensation 
+    if (temperature[i + 1] > 99 || temperature[i + 1] < -9) {
+      forecastDisplay[i].writeDigitAscii(3, temperatureString.charAt(2));
+    } else {
+      forecastDisplay[i].writeDigitRaw(3, 0x0);
+    }
+    forecastDisplay[i].writeDisplay();
+  }
+
+  delay(200);
+
 }
+
 
 void updateDebugStatus() {
   
@@ -322,15 +424,16 @@ void setup() {
   initDebugStatus();
   clearDisplays();
   fetchDate();
-  
+  fetchForecast();
 }
 
 void loop() {
   time = millis() + FETCH_RATE_LIMIT;
   updatePrimaryDisplay();
-  updateForecastDisplay();
-  Serial.println("1 sec...");
-  Serial.flush();
+  for (int i = 0; i < 3; i++) {
+    updateForecastDisplay();
+  }
+  delay(3000);
   fetchForecast();
 }
 
