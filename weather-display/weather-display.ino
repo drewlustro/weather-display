@@ -307,7 +307,7 @@ void updateForecastDisplay() {
     }
   }
 
-  delay(2000);
+  delay(1200);
 
 
   // TOOD: clean this up - no need to dupe code here.
@@ -433,7 +433,7 @@ void loop() {
   for (int i = 0; i < 3; i++) {
     updateForecastDisplay();
   }
-  delay(3000);
+  delay(9000);
   fetchForecast();
 }
 
